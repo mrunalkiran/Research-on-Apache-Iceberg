@@ -1,0 +1,138 @@
+Scala commands used for the demo in Shell script:
+
+1. To enter the Apache Spark session with the Iceberg which leads us to the replica of the main cell
+
+mrunal_kiran@Mac ApacheIceberg % export JAVA_HOME="$(/usr/libexec/java_home -v11)"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+spark-shell \
+  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  --conf spark.sql.catalog.local=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.local.type=hadoop \
+  --conf spark.sql.catalog.local.warehouse="file://${HOME}/Desktop/Assignments/Sem2/Data Warehousing/ApacheIceberg"
+
+
+
+
+2. Create an iceberg table in the local catalog
+
+spark.sql("DROP TABLE IF EXISTS local.default.events")
+
+spark.sql("""
+  CREATE TABLE local.default.events (
+    id            INT,
+    event_type    STRING,
+    event_date    DATE,
+    user_id       STRING,
+    session_id    STRING,
+    revenue       DOUBLE,
+    country       STRING,
+    browser       STRING,
+    os            STRING,
+    device        STRING,
+    region        STRING
+  )
+  USING iceberg
+  PARTITIONED BY (event_date)
+""")
+
+
+
+
+3. Generate synthetic data for the iceberg table
+
+import spark.implicits._
+
+// Helpers
+val eventTypes = Seq("click","view","purchase","signup","download")
+val countries  = Seq("US","CA","GB","AU","IN")
+val browsers   = Seq("Chrome","Firefox","Safari","Edge")
+val oss        = Seq("Windows","macOS","Linux","Android","iOS")
+val devices    = Seq("desktop","mobile","tablet")
+val regions    = Seq("North","South","East","West","Central")
+val startDate  = java.time.LocalDate.of(2025,4,1)
+val rnd        = new scala.util.Random()
+
+val big11 = spark
+  .range(1,5001)    // IDs 1–5000
+  .map { i =>
+    val et   = eventTypes(rnd.nextInt(eventTypes.size))
+    val date = startDate.plusDays(rnd.nextInt(30))
+    val uid  = s"user_${rnd.nextInt(1000)}"
+    val sid  = java.util.UUID.randomUUID().toString.take(8)
+    val rev  = rnd.nextDouble()*100.0
+    val ctr  = countries(rnd.nextInt(countries.size))
+    val br   = browsers(rnd.nextInt(browsers.size))
+    val osys = oss(rnd.nextInt(oss.size))
+    val dev  = devices(rnd.nextInt(devices.size))
+    val reg  = regions(rnd.nextInt(regions.size))
+    (i.toInt, et, java.sql.Date.valueOf(date), uid, sid, rev, ctr, br, osys, dev, reg)
+  }
+  .toDF("id","event_type","event_date","user_id","session_id","revenue","country","browser","os","device","region")
+
+big11.show(10)
+
+
+
+
+
+4. To show the existing tables
+
+spark.sql("SHOW TABLES IN local.default").show()
+
+
+
+
+
+5. Have a glimpse of the data
+
+spark.sql("SELECT * FROM local.default.events LIMIT 10").show(false)
+
+
+
+
+
+6. Aggregation query
+
+spark.sql("""
+     |      |SELECT event_date, event_type, COUNT(*) AS cnt
+     |      |FROM local.default.events
+     |      |GROUP BY event_date, event_type
+     |      |ORDER BY event_date, event_type
+     |      |""".stripMargin).show(20, false)
+
+
+
+
+7. Inspecting Snapshot history
+
+spark.sql("SELECT * FROM local.default.events.snapshots").show(5, false)
+
+
+
+
+
+8. Time travel to first snapshot
+
+val first = spark.sql(
+     |   "SELECT snapshot_id FROM local.default.events.snapshots ORDER BY committed_at LIMIT 1"
+     | ).as[Long].first()
+
+spark.sql(s"SELECT * FROM local.default.events VERSION AS OF $first LIMIT 5")
+     .show(false)
+
+
+
+
+9. Inspect manifests
+
+spark.sql("SELECT * FROM local.default.events.manifests").show(5, false)
+
+
+
+
+
+10. Inspect data files
+
+spark.sql("SELECT * FROM local.default.events.data_files").show(5, false)
